@@ -125,7 +125,7 @@ class ITVArgentona:
 
         return unique
 
-    def _navegar_siguiente_paso(self, actual_view_name):
+    def _navegar_siguiente_paso(self, actual_view_name, post_data=None):
         """Navega al siguiente paso del proceso"""
         if not self.guid_sesion:
             print("⚠️  No hay guidSesion para navegar")
@@ -138,12 +138,55 @@ class ITVArgentona:
         }
 
         try:
-            response = self.session.get(url, params=params)
+            if post_data:
+                # POST con datos
+                response = self.session.post(url, params=params, data=post_data)
+            else:
+                # GET simple
+                response = self.session.get(url, params=params)
+
+            if response.status_code != 200:
+                print(f"   ⚠️  Código de respuesta: {response.status_code}")
+                # Guardar respuesta de error para análisis
+                self._save_html(response.text, f"error_{actual_view_name}")
+
             response.raise_for_status()
             return response
         except Exception as e:
-            print(f"⚠️  Error al navegar: {e}")
+            print(f"⚠️  Error al navegar desde {actual_view_name}: {e}")
             return None
+
+    def _analizar_paso_vehiculo(self, html):
+        """Analiza el paso de vehículo para extraer opciones"""
+        soup = BeautifulSoup(html, 'html.parser')
+
+        # Buscar inputs, selects, radios, checkboxes
+        inputs = soup.find_all(['input', 'select'])
+        print(f"   📋 Campos encontrados: {len(inputs)}")
+
+        datos = {}
+        for inp in inputs:
+            name = inp.get('name')
+            value = inp.get('value')
+            inp_type = inp.get('type', 'text')
+
+            if name:
+                # Si es radio/checkbox y está checked, usar su valor
+                if inp_type in ['radio', 'checkbox']:
+                    if inp.get('checked'):
+                        datos[name] = value
+                # Si es select, tomar la primera opción
+                elif inp.name == 'select':
+                    options = inp.find_all('option')
+                    if options:
+                        datos[name] = options[0].get('value', '')
+                # Si tiene valor, usarlo
+                elif value:
+                    datos[name] = value
+
+        if datos:
+            print(f"   ✓ Datos del vehículo detectados: {list(datos.keys())}")
+        return datos
 
     def search_appointments(self):
         """
@@ -184,6 +227,9 @@ class ITVArgentona:
             if response:
                 print(f"✓ Navegado a vehículo")
                 self._save_html(response.text, "paso2_vehiculo")
+
+                # Analizar el paso de vehículo
+                datos_vehiculo = self._analizar_paso_vehiculo(response.text)
             else:
                 print("⚠️  No se pudo navegar al paso de vehículo")
                 return []
@@ -192,12 +238,21 @@ class ITVArgentona:
 
             # PASO 3: Navegar desde Eleccion_Vehiculo a Eleccion_Estacion
             print("📍 PASO 3/5: Vehículo → Estación...")
-            response = self._navegar_siguiente_paso('Eleccion_Vehiculo')
+            # Intentar con los datos del vehículo si los hay
+            if datos_vehiculo:
+                print(f"   📤 Enviando datos del vehículo...")
+                response = self._navegar_siguiente_paso('Eleccion_Vehiculo', post_data=datos_vehiculo)
+            else:
+                # Intentar sin datos
+                response = self._navegar_siguiente_paso('Eleccion_Vehiculo')
+
             if response:
                 print(f"✓ Navegado a estación")
                 self._save_html(response.text, "paso3_estacion")
             else:
                 print("⚠️  No se pudo navegar al paso de estación")
+                print("💡 El servidor podría requerir seleccionar un tipo de vehículo específico")
+                print("💡 Revisa output/paso2_vehiculo_*.html para ver las opciones")
                 return []
 
             time.sleep(0.5)
