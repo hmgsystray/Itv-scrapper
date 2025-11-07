@@ -191,7 +191,12 @@ class ITVMonitor:
         print(f"   • Matrícula: {self.license_plate}")
         print(f"   • Intervalo: {self.interval_minutes} minutos")
         print(f"   • Scraper: requests (ligero y rápido)")
-        print(f"   • Discord webhook: Configurado ✓")
+
+        if self.notifier.terminal_only:
+            print(f"   • Notificaciones: Solo terminal 📟")
+        else:
+            print(f"   • Notificaciones: Discord ✓")
+
         print(f"\n🚀 Iniciando monitoreo continuo...")
         print(f"   Presiona Ctrl+C para detener\n")
 
@@ -241,7 +246,7 @@ def main():
 
     # Obtener configuración
     license_plate = os.getenv("LICENSE_PLATE")
-    discord_webhook = os.getenv("DISCORD_WEBHOOK_URL")
+    discord_webhook = os.getenv("DISCORD_WEBHOOK_URL", "")
     interval = int(os.getenv("MONITOR_INTERVAL_MINUTES", "5"))
 
     # Validar configuración
@@ -249,18 +254,20 @@ def main():
         print("❌ Error: No se ha configurado LICENSE_PLATE en el archivo .env")
         return
 
+    # Informar sobre modo de notificación
     if not discord_webhook:
-        print("❌ Error: No se ha configurado DISCORD_WEBHOOK_URL en el archivo .env")
-        print("💡 Necesitas crear un webhook en Discord:")
+        print("\n⚠️  Discord webhook no configurado")
+        print("📋 Las notificaciones se mostrarán solo por terminal")
+        print("💡 Para recibir notificaciones en Discord:")
         print("   1. Ve a los ajustes del canal donde quieres recibir notificaciones")
         print("   2. Integraciones → Webhooks → Nuevo Webhook")
         print("   3. Copia la URL del webhook y añádela al archivo .env")
-        return
+        print("")
 
     # Crear y iniciar monitor
     monitor = ITVMonitor(
         license_plate=license_plate,
-        discord_webhook_url=discord_webhook,
+        discord_webhook_url=discord_webhook if discord_webhook else None,
         interval_minutes=interval
     )
 

@@ -9,20 +9,21 @@ from datetime import datetime
 
 
 class DiscordNotifier:
-    """Clase para enviar notificaciones a Discord"""
+    """Clase para enviar notificaciones a Discord o mostrar por terminal"""
 
-    def __init__(self, webhook_url):
+    def __init__(self, webhook_url=None):
         """
         Inicializa el notificador de Discord
 
         Args:
-            webhook_url (str): URL del webhook de Discord
+            webhook_url (str, optional): URL del webhook de Discord. Si es None, solo muestra por terminal.
         """
         self.webhook_url = webhook_url
+        self.terminal_only = webhook_url is None or webhook_url == ""
 
     def send_notification(self, title, description, color=0x00ff00, fields=None):
         """
-        Envía una notificación embed a Discord
+        Envía una notificación embed a Discord o muestra por terminal
 
         Args:
             title (str): Título del mensaje
@@ -31,8 +32,23 @@ class DiscordNotifier:
             fields (list): Lista de campos adicionales
 
         Returns:
-            bool: True si se envió correctamente, False en caso contrario
+            bool: True si se envió/mostró correctamente, False en caso contrario
         """
+        # Modo terminal: solo mostrar por consola
+        if self.terminal_only:
+            print("\n" + "="*70)
+            print(f"📢 {title}")
+            print("="*70)
+            print(description)
+            if fields:
+                print("\nDetalles:")
+                for field in fields:
+                    print(f"\n{field.get('name', 'N/A')}:")
+                    print(f"  {field.get('value', 'N/A')}")
+            print("="*70)
+            return True
+
+        # Modo Discord: enviar webhook
         try:
             embed = {
                 "title": title,
