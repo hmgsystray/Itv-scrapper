@@ -188,27 +188,66 @@ class ITVArgentona:
             response.raise_for_status()
 
             print(f"✓ Respuesta recibida (código {response.status_code})")
+            print(f"✓ URL final (después de redirects): {response.url}")
             self._save_html(response.text, "01_reserva_matricula")
 
             # Analizar la página
             soup = BeautifulSoup(response.text, 'html.parser')
 
+            # Buscar guidSesion en la página
+            guid_match = re.search(r'guidSesion["\s=:]+([a-f0-9\-]{36})', response.text, re.IGNORECASE)
+            if guid_match:
+                guid_sesion = guid_match.group(1)
+                print(f"🔑 guidSesion encontrado: {guid_sesion}")
+            else:
+                print("⚠️  No se encontró guidSesion en la página")
+
+            # Buscar todos los scripts externos
+            print("\n📜 Scripts externos encontrados:")
+            external_scripts = soup.find_all('script', src=True)
+            for script in external_scripts[:5]:  # Mostrar primeros 5
+                print(f"   - {script.get('src')}")
+
             # Buscar scripts que puedan contener endpoints de citas
             scripts = soup.find_all('script')
             api_endpoints = []
 
+            print("\n🔍 Analizando scripts inline...")
             for script in scripts:
                 script_text = script.string if script.string else ''
                 # Buscar URLs de API relacionadas con reservas
                 urls = re.findall(r'["\']/(Reserva/\w+)["\']', script_text)
                 api_endpoints.extend(urls)
 
+                # Buscar también endpoints con fetch o ajax
+                fetch_urls = re.findall(r'(?:fetch|ajax).*?["\']([^"\']+)["\']', script_text)
+                api_endpoints.extend(fetch_urls)
+
             if api_endpoints:
                 unique_endpoints = list(set(api_endpoints))
-                print(f"🔗 Endpoints API encontrados: {unique_endpoints}")
+                print(f"\n🔗 Endpoints API encontrados ({len(unique_endpoints)}):")
+                for endpoint in unique_endpoints[:10]:  # Mostrar primeros 10
+                    print(f"   - {endpoint}")
+
+            # Buscar formularios
+            forms = soup.find_all('form')
+            print(f"\n📝 Formularios encontrados: {len(forms)}")
+            for i, form in enumerate(forms, 1):
+                action = form.get('action', 'No action')
+                method = form.get('method', 'GET').upper()
+                print(f"   Formulario #{i}: {method} → {action}")
+
+            # Buscar pasos del proceso de reserva
+            print("\n🔢 Buscando pasos del proceso...")
+            steps_text = ['contacto', 'vehículo', 'estación', 'fecha', 'hora', 'datos', 'pago']
+            for step_word in steps_text:
+                if step_word in response.text.lower():
+                    matches = re.findall(rf'[^<>]*{step_word}[^<>]*', response.text.lower())
+                    if matches:
+                        print(f"   ✓ '{step_word}' encontrado en la página")
 
             # Buscar citas en la respuesta
-            print("🔍 Extrayendo citas disponibles...")
+            print("\n🔍 Extrayendo citas disponibles...")
             appointments = self._extract_appointments_from_html(response.text)
 
             print(f"\n📊 Total de elementos encontrados: {len(appointments)}")
@@ -223,6 +262,10 @@ class ITVArgentona:
                 print(f"📈 Resumen por tipo:")
                 for apt_type, count in types.items():
                     print(f"   - {apt_type}: {count}")
+            else:
+                print("\n💡 No se encontraron citas en esta página")
+                print("   Parece que estás en el paso de 'Datos de Contacto'")
+                print("   Las citas se mostrarán en un paso posterior")
 
             return appointments
 
