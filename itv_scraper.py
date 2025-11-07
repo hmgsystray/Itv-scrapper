@@ -257,40 +257,96 @@ class ITVArgentona:
 
             time.sleep(0.5)
 
-            # PASO 4: Navegar desde Eleccion_Estacion a Eleccion_Fecha_Hora
-            print("📍 PASO 4/5: Estación → Fecha y Hora...")
+            # PASO 4: Navegar desde Eleccion_Estacion - ¡AQUÍ ESTÁN LAS FECHAS!
+            print("📍 PASO 4/4: Estación → FECHAS DISPONIBLES...")
             response = self._navegar_siguiente_paso('Eleccion_Estacion')
             if response:
-                print(f"✓ Navegado a selección de fecha y hora")
-                self._save_html(response.text, "paso4_fechas")
+                print(f"✓ ¡Llegamos al calendario de fechas disponibles!")
+                html_file = self._save_html(response.text, "paso4_FECHAS_DISPONIBLES")
+                print(f"✓ HTML completo guardado en: {html_file}")
             else:
-                print("⚠️  No se pudo navegar al paso de fechas")
+                print("⚠️  No se pudo llegar al paso de fechas")
                 return []
 
-            time.sleep(0.5)
+            time.sleep(1)
 
-            # PASO 5: Extraer citas disponibles
-            print("📍 PASO 5/5: Extrayendo citas disponibles...\n")
-            appointments = self._extract_appointments_from_html(response.text)
+            # PASO 5: Extraer citas disponibles del HTML
+            print("\n📍 ANALIZANDO FECHAS DISPONIBLES...")
+            print("="*70)
 
-            # También buscar en el texto elementos que parezcan fechas
             soup = BeautifulSoup(response.text, 'html.parser')
 
-            # Buscar texto que contenga "disponible" o "libre"
-            disponibles = soup.find_all(text=re.compile(r'(disponible|libre)', re.I))
-            if disponibles:
-                print(f"✓ Encontradas {len(disponibles)} menciones de disponibilidad")
+            # Extraer TODO el texto visible de la página
+            texto_visible = soup.get_text()
 
-            # Buscar todos los elementos clickeables
-            clickables = soup.find_all(['button', 'a'], href=True) + soup.find_all(['button', 'a'], onclick=True)
-            print(f"✓ Encontrados {len(clickables)} elementos clickeables")
+            # Buscar patrones de fechas en el texto
+            import re
+            # Patrón dd/mm/yyyy
+            fechas_formato1 = re.findall(r'\b(\d{1,2}/\d{1,2}/\d{4})\b', texto_visible)
+            # Patrón "5 de febrero de 2025"
+            fechas_formato2 = re.findall(r'\b(\d{1,2}\s+de\s+\w+\s+de\s+\d{4})\b', texto_visible, re.IGNORECASE)
+            # Patrón de horas HH:MM
+            horas_encontradas = re.findall(r'\b(\d{1,2}:\d{2})\b', texto_visible)
 
-            if not appointments:
-                print("\n⚠️  No se detectaron citas con los selectores actuales")
-                print("💡 Revisa el HTML guardado en: output/paso4_fechas_*.html")
-                print("💡 Para entender la estructura exacta de las citas")
+            print(f"📅 Fechas encontradas (dd/mm/yyyy): {len(fechas_formato1)}")
+            if fechas_formato1:
+                for fecha in list(set(fechas_formato1))[:10]:
+                    print(f"   • {fecha}")
 
-            return appointments
+            print(f"\n📅 Fechas encontradas (formato texto): {len(fechas_formato2)}")
+            if fechas_formato2:
+                for fecha in list(set(fechas_formato2))[:10]:
+                    print(f"   • {fecha}")
+
+            print(f"\n🕐 Horas encontradas: {len(horas_encontradas)}")
+            if horas_encontradas:
+                for hora in list(set(horas_encontradas))[:20]:
+                    print(f"   • {hora}")
+
+            # Buscar elementos específicos de calendario
+            print(f"\n🔍 Buscando elementos de calendario...")
+
+            # Buscar divs/botones con clases relacionadas con calendario
+            elementos_calendario = soup.find_all(class_=re.compile(r'(calendar|dia|fecha|disponible|slot|time)', re.I))
+            print(f"   Elementos con clases de calendario: {len(elementos_calendario)}")
+
+            # Buscar elementos con data-fecha o similar
+            elementos_data = soup.find_all(attrs={'data-fecha': True}) + \
+                           soup.find_all(attrs={'data-date': True}) + \
+                           soup.find_all(attrs={'data-dia': True})
+            print(f"   Elementos con data-fecha: {len(elementos_data)}")
+
+            # Extraer citas con el método mejorado
+            appointments = self._extract_appointments_from_html(response.text)
+
+            # Combinar todo en una lista de citas
+            citas_encontradas = []
+
+            # De las fechas regex
+            for fecha in set(fechas_formato1):
+                citas_encontradas.append({'text': fecha, 'type': 'fecha_dd_mm_yyyy'})
+            for fecha in set(fechas_formato2):
+                citas_encontradas.append({'text': fecha, 'type': 'fecha_texto'})
+
+            # De los elementos DOM
+            citas_encontradas.extend(appointments)
+
+            print(f"\n📊 TOTAL CITAS/FECHAS DETECTADAS: {len(citas_encontradas)}")
+            print("="*70)
+
+            if citas_encontradas:
+                print("\n✅ Muestra de citas encontradas:")
+                for i, cita in enumerate(citas_encontradas[:15], 1):
+                    print(f"{i}. {cita.get('text', 'N/A')} [tipo: {cita.get('type', 'N/A')}]")
+                if len(citas_encontradas) > 15:
+                    print(f"... y {len(citas_encontradas) - 15} más")
+            else:
+                print("\n⚠️  No se detectaron citas con los métodos automáticos")
+                print(f"💡 Abre el archivo: {html_file}")
+                print("💡 Y busca cómo se ven las fechas disponibles en el HTML")
+                print("💡 Luego dime la estructura y ajustaré el extractor")
+
+            return citas_encontradas
 
         except Exception as e:
             print(f"\n❌ Error: {str(e)}")
