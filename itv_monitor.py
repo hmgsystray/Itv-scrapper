@@ -16,7 +16,7 @@ from discord_notifier import DiscordNotifier
 class ITVMonitor:
     """Monitor continuo para detectar nuevas citas"""
 
-    def __init__(self, license_plate, discord_webhook_url, interval_minutes=5, headless=True):
+    def __init__(self, license_plate, discord_webhook_url, interval_minutes=5):
         """
         Inicializa el monitor
 
@@ -24,11 +24,9 @@ class ITVMonitor:
             license_plate (str): Matrícula del vehículo
             discord_webhook_url (str): URL del webhook de Discord
             interval_minutes (int): Intervalo entre revisiones en minutos
-            headless (bool): Ejecutar navegador en modo headless
         """
         self.license_plate = license_plate
         self.interval_minutes = interval_minutes
-        self.headless = headless
         self.state_file = "monitor_state.json"
         self.last_appointments = []
         self.last_check = None
@@ -132,12 +130,12 @@ class ITVMonitor:
             # Crear scraper
             scraper = ITVArgentona(
                 license_plate=self.license_plate,
-                headless=self.headless,
-                take_screenshots=True
+                save_html=True
             )
 
             # Buscar citas
             appointments = scraper.search_appointments()
+            scraper.close()
 
             # Detectar nuevas citas
             has_new, new_appointments = self._detect_new_appointments(appointments)
@@ -192,7 +190,7 @@ class ITVMonitor:
         print(f"\n📋 Configuración:")
         print(f"   • Matrícula: {self.license_plate}")
         print(f"   • Intervalo: {self.interval_minutes} minutos")
-        print(f"   • Modo headless: {self.headless}")
+        print(f"   • Scraper: requests (ligero y rápido)")
         print(f"   • Discord webhook: Configurado ✓")
         print(f"\n🚀 Iniciando monitoreo continuo...")
         print(f"   Presiona Ctrl+C para detener\n")
@@ -245,7 +243,6 @@ def main():
     license_plate = os.getenv("LICENSE_PLATE")
     discord_webhook = os.getenv("DISCORD_WEBHOOK_URL")
     interval = int(os.getenv("MONITOR_INTERVAL_MINUTES", "5"))
-    headless = os.getenv("HEADLESS", "true").lower() == "true"
 
     # Validar configuración
     if not license_plate:
@@ -264,8 +261,7 @@ def main():
     monitor = ITVMonitor(
         license_plate=license_plate,
         discord_webhook_url=discord_webhook,
-        interval_minutes=interval,
-        headless=headless
+        interval_minutes=interval
     )
 
     monitor.start(notify_start=True)
