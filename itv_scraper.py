@@ -185,46 +185,147 @@ class ITVArgentona:
             # Capturar el HTML de la página
             page_source = self.driver.page_source
 
-            # Buscar elementos que puedan contener citas
-            # Esto dependerá de la estructura real de la página
-            date_elements = self.driver.find_elements(By.CSS_SELECTOR, "[class*='fecha'], [class*='date'], .appointment-date")
-            time_elements = self.driver.find_elements(By.CSS_SELECTOR, "[class*='hora'], [class*='time'], .appointment-time")
+            # Esperar a que cargue contenido dinámico
+            time.sleep(2)
 
-            if date_elements or time_elements:
-                print(f"✓ Encontrados {len(date_elements)} elementos de fecha")
-                print(f"✓ Encontrados {len(time_elements)} elementos de hora")
+            # Intentar múltiples estrategias para encontrar citas
+            print("🔍 Buscando citas con múltiples selectores...")
 
-                for i, elem in enumerate(date_elements[:10]):  # Limitar a 10 primeras
-                    try:
-                        appointments.append({
-                            'index': i + 1,
-                            'text': elem.text,
-                            'html': elem.get_attribute('outerHTML')[:200]
-                        })
-                    except:
-                        pass
+            # Estrategia 1: Buscar calendarios y slots de tiempo
+            calendar_selectors = [
+                "[class*='calendar']",
+                "[class*='disponible']",
+                "[class*='available']",
+                "[class*='slot']",
+                "[class*='horario']",
+                ".fc-event",  # FullCalendar
+                "[data-date]",
+                "[data-time]",
+            ]
 
-            # Si no encontramos elementos específicos, guardar info de la página
+            for selector in calendar_selectors:
+                elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                if elements:
+                    print(f"✓ Encontrados {len(elements)} elementos con: {selector}")
+                    for elem in elements:
+                        if elem.is_displayed() and elem.text.strip():
+                            appointments.append({
+                                'date': elem.get_attribute('data-date') or 'N/A',
+                                'time': elem.get_attribute('data-time') or elem.text,
+                                'text': elem.text.strip(),
+                                'selector': selector
+                            })
+
+            # Estrategia 2: Buscar botones o enlaces de citas
             if not appointments:
-                print("ℹ️  No se encontraron citas con los selectores estándar")
-                print("📄 Guardando HTML de la página para análisis...")
+                print("🔍 Intentando con botones y enlaces...")
+                button_selectors = [
+                    "button:not([class*='menu']):not([class*='nav'])",
+                    "a[href*='reserva']",
+                    "a[href*='cita']",
+                    "[onclick*='fecha']",
+                    "[onclick*='hora']"
+                ]
 
-                # Guardar el HTML para análisis manual
-                os.makedirs("output", exist_ok=True)
-                with open("output/page_content.html", "w", encoding="utf-8") as f:
-                    f.write(page_source)
-                print("✓ HTML guardado en output/page_content.html")
+                for selector in button_selectors:
+                    try:
+                        elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        for elem in elements:
+                            text = elem.text.strip()
+                            # Filtrar elementos que parezcan citas (contienen números, fechas, etc)
+                            if text and (any(char.isdigit() for char in text) or
+                                       any(word in text.lower() for word in ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+                                                                             'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+                                                                             'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'])):
+                                appointments.append({
+                                    'text': text,
+                                    'selector': selector,
+                                    'href': elem.get_attribute('href') or '',
+                                    'onclick': elem.get_attribute('onclick') or ''
+                                })
+                    except:
+                        continue
 
-                # Buscar cualquier elemento que pueda ser relevante
-                all_buttons = self.driver.find_elements(By.TAG_NAME, "button")
-                all_divs = self.driver.find_elements(By.CSS_SELECTOR, "[class*='cita'], [class*='appointment'], [class*='reserv']")
+            # Estrategia 3: Buscar tablas con horarios
+            if not appointments:
+                print("🔍 Buscando tablas con horarios...")
+                tables = self.driver.find_elements(By.TAG_NAME, "table")
+                for table in tables:
+                    rows = table.find_elements(By.TAG_NAME, "tr")
+                    for row in rows:
+                        cells = row.find_elements(By.TAG_NAME, "td")
+                        if cells:
+                            row_text = " | ".join([cell.text.strip() for cell in cells if cell.text.strip()])
+                            if row_text and any(char.isdigit() for char in row_text):
+                                appointments.append({
+                                    'text': row_text,
+                                    'selector': 'table row'
+                                })
 
-                print(f"ℹ️  Elementos encontrados en la página:")
-                print(f"   - {len(all_buttons)} botones")
-                print(f"   - {len(all_divs)} divs relacionados con citas/reservas")
+            # Estrategia 4: Analizar texto visible en la página
+            if not appointments:
+                print("🔍 Analizando texto visible en la página...")
+                body = self.driver.find_element(By.TAG_NAME, "body")
+                body_text = body.text
+
+                # Buscar patrones de fechas y horas
+                import re
+                date_patterns = [
+                    r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}',  # dd/mm/yyyy o dd-mm-yyyy
+                    r'\d{1,2}\s+de\s+\w+\s+de\s+\d{4}',  # 15 de enero de 2024
+                ]
+
+                for pattern in date_patterns:
+                    matches = re.findall(pattern, body_text)
+                    for match in matches:
+                        appointments.append({
+                            'text': match,
+                            'selector': 'text pattern'
+                        })
+
+            # Guardar HTML siempre para análisis
+            os.makedirs("output", exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            html_file = f"output/page_content_{timestamp}.html"
+            with open(html_file, "w", encoding="utf-8") as f:
+                f.write(page_source)
+
+            # Guardar también texto visible
+            text_file = f"output/page_text_{timestamp}.txt"
+            with open(text_file, "w", encoding="utf-8") as f:
+                body = self.driver.find_element(By.TAG_NAME, "body")
+                f.write(body.text)
+
+            print(f"✓ HTML guardado en {html_file}")
+            print(f"✓ Texto visible guardado en {text_file}")
+
+            # Mostrar estadísticas
+            print(f"\n📊 Estadísticas de elementos:")
+            all_buttons = self.driver.find_elements(By.TAG_NAME, "button")
+            all_links = self.driver.find_elements(By.TAG_NAME, "a")
+            all_divs = self.driver.find_elements(By.CSS_SELECTOR, "[class*='cita'], [class*='appointment'], [class*='reserv'], [class*='disponible']")
+
+            print(f"   - {len(all_buttons)} botones")
+            print(f"   - {len(all_links)} enlaces")
+            print(f"   - {len(all_divs)} divs relacionados con citas/reservas")
+
+            # Deduplicate appointments
+            if appointments:
+                seen = set()
+                unique_appointments = []
+                for apt in appointments:
+                    key = apt.get('text', '')
+                    if key and key not in seen:
+                        seen.add(key)
+                        unique_appointments.append(apt)
+                appointments = unique_appointments
+
+            print(f"\n✓ Total de citas encontradas: {len(appointments)}")
 
         except Exception as e:
             print(f"⚠️  Error al extraer citas: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
         return appointments
 

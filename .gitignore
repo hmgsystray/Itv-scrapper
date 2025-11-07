@@ -39,7 +39,15 @@ config.ini
 # Logs
 *.log
 
+# Monitor state
+monitor_state.json
+
 # Screenshots
 screenshots/
 *.png
 *.jpg
+
+# Output
+output/
+*.html
+*.txt

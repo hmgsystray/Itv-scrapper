@@ -1,10 +1,15 @@
-# 🚗 ITV Argentona Scraper
+# 🚗 ITV Argentona Scraper & Monitor
 
-Scraper automatizado para buscar citas disponibles en la ITV de Argentona (Applus+).
+Scraper y monitor automatizado para buscar citas disponibles en la ITV de Argentona (Applus+) con notificaciones a Discord.
 
 ## 📋 Descripción
 
-Este proyecto es un web scraper que automatiza la búsqueda de citas disponibles en la estación de ITV de Argentona, gestionada por Applus+. El scraper accede al portal de citas online, ingresa la matrícula del vehículo y busca las fechas disponibles.
+Este proyecto es un web scraper y sistema de monitoreo continuo que:
+- 🔍 **Busca automáticamente** citas disponibles en la ITV de Argentona
+- 🔔 **Detecta nuevas citas** comparando con búsquedas anteriores
+- 📱 **Envía notificaciones a Discord** cuando aparecen nuevas citas
+- ⏰ **Monitoreo 24/7** con intervalo configurable
+- 📸 **Capturas de pantalla** del proceso para debugging
 
 ## 🌐 Portal de Citas
 
@@ -49,15 +54,51 @@ cp config.example.env .env
 5. Editar el archivo `.env` con tus datos:
 ```env
 LICENSE_PLATE=1234ABC
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_WEBHOOK_URL
 HEADLESS=true
 SCREENSHOT=true
+MONITOR_INTERVAL_MINUTES=5
+```
+
+### 🔔 Configurar Discord Webhook
+
+Para recibir notificaciones en Discord:
+
+1. Abre Discord y ve al servidor/canal donde quieres recibir notificaciones
+2. Click en ⚙️ **Ajustes del canal**
+3. Ve a **Integraciones** → **Webhooks**
+4. Click en **Nuevo Webhook**
+5. Dale un nombre (ej: "ITV Monitor")
+6. **Copia la URL del webhook**
+7. Pégala en tu archivo `.env` en `DISCORD_WEBHOOK_URL`
+
+Para probar que funciona:
+```bash
+python discord_notifier.py
 ```
 
 ## 📖 Uso
 
-### Uso Básico
+### 🔔 Monitor Continuo (Recomendado)
 
-Ejecutar el scraper con tu matrícula configurada en `.env`:
+El monitor revisa automáticamente las citas disponibles y te notifica en Discord cuando aparecen nuevas:
+
+```bash
+python itv_monitor.py
+```
+
+Esto iniciará el monitor que:
+- ✅ Revisa cada X minutos (configurable en `.env`)
+- ✅ Detecta **solo citas nuevas** (no envía notificaciones duplicadas)
+- ✅ Te notifica instantáneamente en Discord
+- ✅ Guarda el estado entre ejecuciones
+- ✅ Se puede dejar corriendo 24/7
+
+**Presiona `Ctrl+C` para detenerlo**
+
+### 🔍 Búsqueda Única
+
+Para hacer solo una búsqueda sin monitoreo continuo:
 
 ```bash
 python itv_scraper.py
@@ -91,7 +132,9 @@ for apt in appointments:
 
 | Variable | Descripción | Valores | Por Defecto |
 |----------|-------------|---------|-------------|
-| `LICENSE_PLATE` | Matrícula del vehículo (sin espacios) | Ej: `1234ABC` | Requerido |
+| `LICENSE_PLATE` | Matrícula del vehículo (sin espacios) | Ej: `1234ABC` | **Requerido** |
+| `DISCORD_WEBHOOK_URL` | URL del webhook de Discord | URL completa | **Requerido para monitor** |
+| `MONITOR_INTERVAL_MINUTES` | Intervalo entre revisiones (minutos) | Número entero | `5` |
 | `HEADLESS` | Ejecutar navegador sin interfaz gráfica | `true`/`false` | `true` |
 | `SCREENSHOT` | Tomar capturas de pantalla | `true`/`false` | `true` |
 
@@ -99,25 +142,39 @@ for apt in appointments:
 
 ```
 Itv-scrapper/
-├── itv_scraper.py          # Scraper principal
+├── itv_scraper.py          # Scraper principal (búsqueda única)
+├── itv_monitor.py          # Monitor continuo con detección de cambios
+├── discord_notifier.py     # Módulo de notificaciones Discord
 ├── requirements.txt        # Dependencias de Python
 ├── config.example.env      # Ejemplo de configuración
+├── example_usage.py        # Ejemplos de uso avanzado
 ├── .env                    # Configuración personal (no incluir en git)
 ├── .gitignore             # Archivos a ignorar por git
 ├── README.md              # Esta documentación
+├── monitor_state.json     # Estado del monitor (generado automáticamente)
 ├── screenshots/           # Capturas de pantalla (generadas automáticamente)
 └── output/               # Archivos de salida HTML (generados automáticamente)
 ```
 
 ## 🛠️ Funcionalidades
 
+### 🔍 Scraper
 - ✅ Acceso automatizado al portal de Applus+
 - ✅ Búsqueda de citas por matrícula
+- ✅ Múltiples estrategias de extracción de citas
 - ✅ Capturas de pantalla del proceso
 - ✅ Modo headless para ejecución en servidores
-- ✅ Manejo de errores y logging detallado
-- ✅ Guardado de HTML para análisis manual
+- ✅ Guardado de HTML y texto para análisis
 - ✅ Anti-detección básica (user-agent, webdriver properties)
+
+### 🔔 Monitor & Notificaciones
+- ✅ **Monitoreo continuo 24/7** con intervalo configurable
+- ✅ **Detección inteligente de nuevas citas** (evita duplicados)
+- ✅ **Notificaciones instantáneas a Discord**
+- ✅ Persistencia de estado entre ejecuciones
+- ✅ Notificaciones embeds con formato bonito
+- ✅ Manejo de errores con notificaciones
+- ✅ Sistema de hash para detectar cambios
 
 ## 📸 Capturas de Pantalla
 
