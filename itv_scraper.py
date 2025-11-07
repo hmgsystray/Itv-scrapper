@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Scraper ligero para obtener citas en la ITV de Argentona usando requests
+Scraper completo que navega por todo el flujo de reserva de ITV Argentona
 """
 
 import os
@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 
 class ITVArgentona:
-    """Scraper ligero para citas de ITV Argentona"""
+    """Scraper completo para citas de ITV Argentona con navegación multi-paso"""
 
     def __init__(self, license_plate, save_html=True):
         """
@@ -26,9 +26,8 @@ class ITVArgentona:
         """
         self.license_plate = license_plate.replace(" ", "").replace("-", "").upper()
         self.save_html = save_html
-        # URL directa con matrícula y código de estación B08 (Argentona)
-        self.booking_url = f"https://aibs.appluscorp.com/Reserva/ReservarMatricula?language=es&AppCentro=B08&Matricula={self.license_plate}"
         self.base_url = "https://aibs.appluscorp.com"
+        self.guid_sesion = None
 
         # Crear sesión con headers realistas
         self.session = requests.Session()
@@ -38,7 +37,8 @@ class ITVArgentona:
             'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
+            'Upgrade-Insecure-Requests': '1',
+            'Referer': 'https://www.applusiteuve.com/'
         })
 
     def _save_html(self, content, name):
@@ -53,227 +53,192 @@ class ITVArgentona:
             return filepath
         return None
 
+    def _extract_guid_sesion(self, text):
+        """Extrae el guidSesion del HTML"""
+        match = re.search(r'guidSesion["\s=:]+([a-f0-9\-]{36})', text, re.IGNORECASE)
+        if match:
+            return match.group(1)
+        return None
+
     def _extract_appointments_from_html(self, html_content):
-        """
-        Extrae citas del HTML usando BeautifulSoup
-
-        Args:
-            html_content (str): Contenido HTML
-
-        Returns:
-            list: Lista de citas encontradas
-        """
+        """Extrae citas del HTML"""
         appointments = []
         soup = BeautifulSoup(html_content, 'html.parser')
 
-        # Estrategia 1: Buscar elementos con clases relacionadas con citas
+        # Buscar elementos relacionados con fechas y horas
+        # Estrategia 1: Buscar calendarios, slots, horarios
         selectors = [
-            {'class': re.compile(r'.*cita.*', re.I)},
-            {'class': re.compile(r'.*disponible.*', re.I)},
-            {'class': re.compile(r'.*appointment.*', re.I)},
-            {'class': re.compile(r'.*slot.*', re.I)},
-            {'class': re.compile(r'.*horario.*', re.I)},
-            {'class': re.compile(r'.*fecha.*', re.I)},
+            ('[class*="disponible"]', 'disponible'),
+            ('[class*="slot"]', 'slot'),
+            ('[class*="horario"]', 'horario'),
+            ('[class*="fecha"]', 'fecha'),
+            ('[data-fecha]', 'data-fecha'),
+            ('[data-hora]', 'data-hora'),
+            ('.appointment', 'appointment'),
+            ('.time-slot', 'time-slot'),
         ]
 
-        for selector in selectors:
-            elements = soup.find_all(attrs=selector)
-            for elem in elements:
-                text = elem.get_text(strip=True)
-                if text and len(text) > 3:  # Filtrar elementos vacíos
-                    appointments.append({
-                        'text': text,
-                        'type': 'class_match',
-                        'class': elem.get('class', []),
-                        'html': str(elem)[:200]
-                    })
+        for selector, type_name in selectors:
+            try:
+                elements = soup.select(selector)
+                for elem in elements:
+                    text = elem.get_text(strip=True)
+                    if text and len(text) > 3:
+                        appointments.append({
+                            'text': text,
+                            'type': type_name,
+                            'fecha': elem.get('data-fecha', ''),
+                            'hora': elem.get('data-hora', ''),
+                        })
+            except:
+                pass
 
-        # Estrategia 2: Buscar botones con fechas/horas
-        buttons = soup.find_all(['button', 'a'])
+        # Estrategia 2: Buscar botones con fechas
+        buttons = soup.find_all(['button', 'a', 'div'], class_=True)
         for button in buttons:
             text = button.get_text(strip=True)
-            # Buscar patrones de fecha/hora
-            if text and (any(char.isdigit() for char in text) or
-                        any(month in text.lower() for month in
-                            ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
-                             'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'])):
+            classes = ' '.join(button.get('class', []))
 
-                # Evitar botones de navegación
-                if not any(skip in text.lower() for skip in ['menu', 'inicio', 'cerrar', 'cancelar', 'volver']):
-                    appointments.append({
-                        'text': text,
-                        'type': 'button',
-                        'href': button.get('href', ''),
-                        'onclick': button.get('onclick', '')
-                    })
-
-        # Estrategia 3: Buscar calendarios (FullCalendar, etc)
-        calendar_elements = soup.find_all(['td', 'div'], attrs={
-            'data-date': True,
-            'data-time': True
-        })
-        for elem in calendar_elements:
-            appointments.append({
-                'text': elem.get_text(strip=True),
-                'type': 'calendar',
-                'date': elem.get('data-date'),
-                'time': elem.get('data-time')
-            })
-
-        # Estrategia 4: Buscar en tablas
-        tables = soup.find_all('table')
-        for table in tables:
-            rows = table.find_all('tr')
-            for row in rows:
-                cells = row.find_all(['td', 'th'])
-                if cells:
-                    row_text = ' | '.join([cell.get_text(strip=True) for cell in cells if cell.get_text(strip=True)])
-                    if row_text and any(char.isdigit() for char in row_text):
-                        appointments.append({
-                            'text': row_text,
-                            'type': 'table_row'
-                        })
-
-        # Estrategia 5: Buscar con regex en todo el texto
-        text_content = soup.get_text()
-
-        # Patrón: dd/mm/yyyy o dd-mm-yyyy
-        date_pattern = r'\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b'
-        dates_found = re.findall(date_pattern, text_content)
-
-        # Patrón: "15 de enero de 2024"
-        spanish_date_pattern = r'\b(\d{1,2}\s+de\s+\w+\s+de\s+\d{4})\b'
-        spanish_dates = re.findall(spanish_date_pattern, text_content, re.IGNORECASE)
-
-        # Patrón: Horas (HH:MM)
-        time_pattern = r'\b(\d{1,2}:\d{2})\b'
-        times_found = re.findall(time_pattern, text_content)
-
-        for date in dates_found[:20]:  # Limitar resultados
-            appointments.append({
-                'text': date,
-                'type': 'regex_date'
-            })
-
-        for date in spanish_dates[:20]:
-            appointments.append({
-                'text': date,
-                'type': 'regex_spanish_date'
-            })
+            # Detectar si contiene fecha/hora
+            if any(word in text.lower() for word in ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+                                                       'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']):
+                appointments.append({
+                    'text': text,
+                    'type': 'button_fecha',
+                    'classes': classes
+                })
+            elif re.search(r'\d{1,2}:\d{2}', text):
+                appointments.append({
+                    'text': text,
+                    'type': 'button_hora',
+                    'classes': classes
+                })
 
         # Deduplicar
         seen = set()
-        unique_appointments = []
+        unique = []
         for apt in appointments:
             key = apt['text']
-            if key and key not in seen and len(key) > 3:
+            if key and key not in seen:
                 seen.add(key)
-                unique_appointments.append(apt)
+                unique.append(apt)
 
-        return unique_appointments
+        return unique
+
+    def _navegar_siguiente_paso(self, actual_view_name):
+        """Navega al siguiente paso del proceso"""
+        if not self.guid_sesion:
+            print("⚠️  No hay guidSesion para navegar")
+            return None
+
+        url = f"{self.base_url}/Reserva/NavegarAVistaSiguiente"
+        params = {
+            'guidSesion': self.guid_sesion,
+            'actualViewName': actual_view_name
+        }
+
+        try:
+            response = self.session.get(url, params=params)
+            response.raise_for_status()
+            return response
+        except Exception as e:
+            print(f"⚠️  Error al navegar: {e}")
+            return None
 
     def search_appointments(self):
         """
-        Busca citas disponibles para la matrícula
+        Busca citas disponibles navegando por todo el flujo
 
         Returns:
             list: Lista de citas disponibles
         """
         try:
-            print(f"🚗 Buscando citas para matrícula: {self.license_plate}")
-            print(f"🌐 Accediendo directamente a: {self.booking_url}")
+            print("\n" + "="*70)
+            print("🚗 SCRAPER ITV ARGENTONA - Navegación Automática")
+            print("="*70)
+            print(f"Matrícula: {self.license_plate}")
+            print(f"Estación: Argentona (B08)")
+            print("="*70 + "\n")
 
-            # Hacer petición GET directa con la matrícula en la URL
-            response = self.session.get(self.booking_url)
+            # PASO 1: Acceder con la matrícula
+            print("📍 PASO 1/5: Iniciando con matrícula...")
+            url_step1 = f"{self.base_url}/Reserva/ReservarMatricula?language=es&AppCentro=B08&Matricula={self.license_plate}"
+
+            response = self.session.get(url_step1)
             response.raise_for_status()
 
             print(f"✓ Respuesta recibida (código {response.status_code})")
-            print(f"✓ URL final (después de redirects): {response.url}")
-            self._save_html(response.text, "01_reserva_matricula")
+            self._save_html(response.text, "paso1_datos_contacto")
 
-            # Analizar la página
-            soup = BeautifulSoup(response.text, 'html.parser')
-
-            # Buscar guidSesion en la página
-            guid_match = re.search(r'guidSesion["\s=:]+([a-f0-9\-]{36})', response.text, re.IGNORECASE)
-            if guid_match:
-                guid_sesion = guid_match.group(1)
-                print(f"🔑 guidSesion encontrado: {guid_sesion}")
+            # Extraer guidSesion
+            self.guid_sesion = self._extract_guid_sesion(response.text)
+            if self.guid_sesion:
+                print(f"✓ guidSesion: {self.guid_sesion}\n")
             else:
-                print("⚠️  No se encontró guidSesion en la página")
+                print("❌ No se pudo obtener guidSesion")
+                return []
 
-            # Buscar todos los scripts externos
-            print("\n📜 Scripts externos encontrados:")
-            external_scripts = soup.find_all('script', src=True)
-            for script in external_scripts[:5]:  # Mostrar primeros 5
-                print(f"   - {script.get('src')}")
+            # PASO 2: Navegar desde Datos_Contacto a Eleccion_Vehiculo
+            print("📍 PASO 2/5: Datos de contacto → Vehículo...")
+            response = self._navegar_siguiente_paso('Datos_Contacto')
+            if response:
+                print(f"✓ Navegado a vehículo")
+                self._save_html(response.text, "paso2_vehiculo")
+            else:
+                print("⚠️  No se pudo navegar al paso de vehículo")
+                return []
 
-            # Buscar scripts que puedan contener endpoints de citas
-            scripts = soup.find_all('script')
-            api_endpoints = []
+            time.sleep(0.5)
 
-            print("\n🔍 Analizando scripts inline...")
-            for script in scripts:
-                script_text = script.string if script.string else ''
-                # Buscar URLs de API relacionadas con reservas
-                urls = re.findall(r'["\']/(Reserva/\w+)["\']', script_text)
-                api_endpoints.extend(urls)
+            # PASO 3: Navegar desde Eleccion_Vehiculo a Eleccion_Estacion
+            print("📍 PASO 3/5: Vehículo → Estación...")
+            response = self._navegar_siguiente_paso('Eleccion_Vehiculo')
+            if response:
+                print(f"✓ Navegado a estación")
+                self._save_html(response.text, "paso3_estacion")
+            else:
+                print("⚠️  No se pudo navegar al paso de estación")
+                return []
 
-                # Buscar también endpoints con fetch o ajax
-                fetch_urls = re.findall(r'(?:fetch|ajax).*?["\']([^"\']+)["\']', script_text)
-                api_endpoints.extend(fetch_urls)
+            time.sleep(0.5)
 
-            if api_endpoints:
-                unique_endpoints = list(set(api_endpoints))
-                print(f"\n🔗 Endpoints API encontrados ({len(unique_endpoints)}):")
-                for endpoint in unique_endpoints[:10]:  # Mostrar primeros 10
-                    print(f"   - {endpoint}")
+            # PASO 4: Navegar desde Eleccion_Estacion a Eleccion_Fecha_Hora
+            print("📍 PASO 4/5: Estación → Fecha y Hora...")
+            response = self._navegar_siguiente_paso('Eleccion_Estacion')
+            if response:
+                print(f"✓ Navegado a selección de fecha y hora")
+                self._save_html(response.text, "paso4_fechas")
+            else:
+                print("⚠️  No se pudo navegar al paso de fechas")
+                return []
 
-            # Buscar formularios
-            forms = soup.find_all('form')
-            print(f"\n📝 Formularios encontrados: {len(forms)}")
-            for i, form in enumerate(forms, 1):
-                action = form.get('action', 'No action')
-                method = form.get('method', 'GET').upper()
-                print(f"   Formulario #{i}: {method} → {action}")
+            time.sleep(0.5)
 
-            # Buscar pasos del proceso de reserva
-            print("\n🔢 Buscando pasos del proceso...")
-            steps_text = ['contacto', 'vehículo', 'estación', 'fecha', 'hora', 'datos', 'pago']
-            for step_word in steps_text:
-                if step_word in response.text.lower():
-                    matches = re.findall(rf'[^<>]*{step_word}[^<>]*', response.text.lower())
-                    if matches:
-                        print(f"   ✓ '{step_word}' encontrado en la página")
-
-            # Buscar citas en la respuesta
-            print("\n🔍 Extrayendo citas disponibles...")
+            # PASO 5: Extraer citas disponibles
+            print("📍 PASO 5/5: Extrayendo citas disponibles...\n")
             appointments = self._extract_appointments_from_html(response.text)
 
-            print(f"\n📊 Total de elementos encontrados: {len(appointments)}")
+            # También buscar en el texto elementos que parezcan fechas
+            soup = BeautifulSoup(response.text, 'html.parser')
 
-            # Mostrar resumen por tipo
-            if appointments:
-                types = {}
-                for apt in appointments:
-                    apt_type = apt.get('type', 'unknown')
-                    types[apt_type] = types.get(apt_type, 0) + 1
+            # Buscar texto que contenga "disponible" o "libre"
+            disponibles = soup.find_all(text=re.compile(r'(disponible|libre)', re.I))
+            if disponibles:
+                print(f"✓ Encontradas {len(disponibles)} menciones de disponibilidad")
 
-                print(f"📈 Resumen por tipo:")
-                for apt_type, count in types.items():
-                    print(f"   - {apt_type}: {count}")
-            else:
-                print("\n💡 No se encontraron citas en esta página")
-                print("   Parece que estás en el paso de 'Datos de Contacto'")
-                print("   Las citas se mostrarán en un paso posterior")
+            # Buscar todos los elementos clickeables
+            clickables = soup.find_all(['button', 'a'], href=True) + soup.find_all(['button', 'a'], onclick=True)
+            print(f"✓ Encontrados {len(clickables)} elementos clickeables")
+
+            if not appointments:
+                print("\n⚠️  No se detectaron citas con los selectores actuales")
+                print("💡 Revisa el HTML guardado en: output/paso4_fechas_*.html")
+                print("💡 Para entender la estructura exacta de las citas")
 
             return appointments
 
-        except requests.RequestException as e:
-            print(f"❌ Error de conexión: {str(e)}")
-            return []
         except Exception as e:
-            print(f"❌ Error general: {str(e)}")
+            print(f"\n❌ Error: {str(e)}")
             import traceback
             traceback.print_exc()
             return []
@@ -281,47 +246,29 @@ class ITVArgentona:
     def close(self):
         """Cierra la sesión"""
         self.session.close()
-        print("🔒 Sesión cerrada")
 
 
 def main():
     """Función principal"""
     load_dotenv()
 
-    # Obtener configuración
-    license_plate = os.getenv("LICENSE_PLATE")
+    license_plate = os.getenv("LICENSE_PLATE", "3332FSS")
 
-    if not license_plate:
-        print("❌ Error: No se ha configurado LICENSE_PLATE en el archivo .env")
-        print("💡 Copia config.example.env a .env y configura tu matrícula")
-        return
-
-    # Crear scraper y buscar citas
-    print("\n" + "="*70)
-    print("  ITV ARGENTONA SCRAPER (requests version)")
-    print("="*70 + "\n")
+    print("\n" + "╔" + "="*68 + "╗")
+    print("║" + " "*15 + "ITV ARGENTONA SCRAPER v2.0" + " "*27 + "║")
+    print("╚" + "="*68 + "╝\n")
 
     scraper = ITVArgentona(license_plate=license_plate, save_html=True)
     appointments = scraper.search_appointments()
     scraper.close()
 
-    # Mostrar resultados
-    print("\n" + "="*70)
-    print("📋 RESULTADOS DE LA BÚSQUEDA")
-    print("="*70)
-
     if appointments:
-        print(f"\n✓ Se encontraron {len(appointments)} elementos:\n")
-        for i, apt in enumerate(appointments[:20], 1):  # Mostrar máximo 20
-            print(f"{i}. [{apt.get('type', 'N/A')}] {apt.get('text', 'N/A')}")
-
-        if len(appointments) > 20:
-            print(f"\n... y {len(appointments) - 20} más")
-    else:
-        print("\n⚠️  No se encontraron citas disponibles")
-        print("💡 Revisa los archivos HTML en la carpeta 'output' para análisis")
-
-    print("\n" + "="*70)
+        print("\n" + "="*70)
+        print(f"✅ Se encontraron {len(appointments)} posibles citas:")
+        print("="*70)
+        for i, apt in enumerate(appointments[:10], 1):
+            print(f"{i}. {apt.get('text', 'N/A')} (tipo: {apt.get('type', 'N/A')})")
+        print("="*70 + "\n")
 
 
 if __name__ == "__main__":
