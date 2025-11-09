@@ -1,43 +1,47 @@
 #!/usr/bin/env python3
 """
-Módulo para enviar notificaciones a Discord mediante webhook
+Notificador de Discord para el monitor de ITV Argentona
+Envía notificaciones mediante webhooks de Discord
 """
 
 import requests
 import json
 from datetime import datetime
+from typing import List, Dict, Optional
 
 
 class DiscordNotifier:
-    """Clase para enviar notificaciones a Discord o mostrar por terminal"""
+    """Clase para enviar notificaciones a Discord o terminal"""
 
-    def __init__(self, webhook_url=None):
+    def __init__(self, webhook_url: Optional[str] = None):
         """
-        Inicializa el notificador de Discord
+        Inicializa el notificador
 
         Args:
-            webhook_url (str, optional): URL del webhook de Discord. Si es None, solo muestra por terminal.
+            webhook_url: URL del webhook de Discord (opcional)
+                        Si es None, solo muestra por terminal
         """
         self.webhook_url = webhook_url
         self.terminal_only = webhook_url is None or webhook_url == ""
 
-    def send_notification(self, title, description, color=0x00ff00, fields=None):
+    def send_notification(self, title: str, description: str,
+                         color: int = 0x00ff00, fields: Optional[List[Dict]] = None) -> bool:
         """
-        Envía una notificación embed a Discord o muestra por terminal
+        Envía una notificación embed a Discord o terminal
 
         Args:
-            title (str): Título del mensaje
-            description (str): Descripción del mensaje
-            color (int): Color del embed en hexadecimal
-            fields (list): Lista de campos adicionales
+            title: Título del mensaje
+            description: Descripción del mensaje
+            color: Color del embed en hexadecimal
+            fields: Lista de campos adicionales
 
         Returns:
-            bool: True si se envió/mostró correctamente, False en caso contrario
+            bool: True si se envió correctamente
         """
-        # Modo terminal: solo mostrar por consola
+        # Modo terminal
         if self.terminal_only:
             print("\n" + "="*70)
-            print(f"📢 {title}")
+            print(f">> {title}")
             print("="*70)
             print(description)
             if fields:
@@ -48,7 +52,7 @@ class DiscordNotifier:
             print("="*70)
             return True
 
-        # Modo Discord: enviar webhook
+        # Modo Discord
         try:
             embed = {
                 "title": title,
@@ -70,27 +74,29 @@ class DiscordNotifier:
             response = requests.post(
                 self.webhook_url,
                 data=json.dumps(data),
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": "application/json"},
+                timeout=10
             )
 
             if response.status_code == 204:
-                print("✓ Notificación enviada a Discord")
+                print("[OK] Notificacion enviada a Discord")
                 return True
             else:
-                print(f"⚠️  Error al enviar notificación: {response.status_code}")
+                print(f"[AVISO] Error al enviar notificacion: {response.status_code}")
                 return False
 
         except Exception as e:
-            print(f"❌ Error al enviar notificación a Discord: {str(e)}")
+            print(f"[ERROR] Error al enviar notificacion a Discord: {str(e)}")
             return False
 
-    def send_new_appointments(self, appointments, license_plate):
+    def send_new_appointments(self, appointments: List[Dict], show_license_plate: bool = False, license_plate: str = "") -> bool:
         """
         Envía notificación de nuevas citas disponibles
 
         Args:
-            appointments (list): Lista de citas disponibles
-            license_plate (str): Matrícula del vehículo
+            appointments: Lista de citas disponibles
+            show_license_plate: Si mostrar la matrícula en el mensaje (default: False)
+            license_plate: Matrícula del vehículo (opcional)
 
         Returns:
             bool: True si se envió correctamente
@@ -98,22 +104,45 @@ class DiscordNotifier:
         if not appointments:
             return False
 
+        # URL base para reservar
+        base_reservation_url = "https://aibs.appluscorp.com/?MenuActivo=mrNuevaReserva"
+
+        # Agrupar por fecha
+        appointments_by_date = {}
+        for apt in appointments:
+            fecha = apt['fecha']
+            if fecha not in appointments_by_date:
+                appointments_by_date[fecha] = []
+            appointments_by_date[fecha].append(apt)
+
         fields = []
-        for i, apt in enumerate(appointments[:10], 1):  # Máximo 10 citas
-            text = apt.get('text', 'N/A')
+        for fecha, citas in sorted(appointments_by_date.items())[:10]:  # Max 10 fechas
+            horas = [cita['hora'] for cita in citas[:5]]  # Max 5 horas por fecha
+            horas_text = ", ".join(horas)
+            if len(citas) > 5:
+                horas_text += f" ... (+{len(citas)-5} más)"
+
             fields.append({
-                "name": f"Cita #{i}",
-                "value": text[:1024],  # Discord limita a 1024 caracteres por field
+                "name": f"📅 {fecha}",
+                "value": f"🕐 {horas_text}",
                 "inline": False
             })
 
-        title = "🚗 ¡Nuevas citas disponibles en ITV Argentona!"
-        description = f"Se han detectado **{len(appointments)} cita(s) disponible(s)** para la matrícula **{license_plate}**\n\n"
+        title = "🔔 NUEVAS CITAS DISPONIBLES en ITV Argentona"
+        description = f"Se han detectado **{len(appointments)} nueva(s) cita(s)** disponible(s)"
 
-        if len(appointments) > 10:
-            description += f"_(Mostrando las primeras 10 de {len(appointments)})_\n"
+        if show_license_plate and license_plate:
+            description += f" para la matrícula **{license_plate}**"
 
-        description += "**¡Reserva ahora!** 👉 https://aibs.appluscorp.com/"
+        description += "\n\n"
+
+        if len(appointments_by_date) > 10:
+            description += f"_(Mostrando las primeras 10 fechas de {len(appointments_by_date)})_\n\n"
+
+        # Mostrar la primera cita con enlace directo
+        primera_cita = appointments[0]
+        description += f"**Primera cita disponible:** {primera_cita['fecha']} a las {primera_cita['hora']}\n\n"
+        description += f"🔗 **[RESERVAR AHORA]({base_reservation_url})**"
 
         return self.send_notification(
             title=title,
@@ -122,19 +151,24 @@ class DiscordNotifier:
             fields=fields
         )
 
-    def send_no_appointments(self, license_plate):
+    def send_no_appointments(self, show_license_plate: bool = False, license_plate: str = "") -> bool:
         """
         Envía notificación de que no hay citas disponibles
 
         Args:
-            license_plate (str): Matrícula del vehículo
+            show_license_plate: Si mostrar la matrícula en el mensaje (default: False)
+            license_plate: Matrícula del vehículo (opcional)
 
         Returns:
             bool: True si se envió correctamente
         """
-        title = "ℹ️ No hay citas disponibles"
-        description = f"No se encontraron citas disponibles para la matrícula **{license_plate}**\n\n"
-        description += "El monitor seguirá buscando..."
+        title = "No hay citas disponibles"
+        description = "No se encontraron citas disponibles"
+
+        if show_license_plate and license_plate:
+            description += f" para la matrícula **{license_plate}**"
+
+        description += "\n\nEl monitor seguirá buscando..."
 
         return self.send_notification(
             title=title,
@@ -142,17 +176,17 @@ class DiscordNotifier:
             color=0xffa500  # Naranja
         )
 
-    def send_error(self, error_message):
+    def send_error(self, error_message: str) -> bool:
         """
         Envía notificación de error
 
         Args:
-            error_message (str): Mensaje de error
+            error_message: Mensaje de error
 
         Returns:
             bool: True si se envió correctamente
         """
-        title = "❌ Error en el monitor"
+        title = "Error en el monitor"
         description = f"Se ha producido un error:\n```{error_message}```"
 
         return self.send_notification(
@@ -161,22 +195,28 @@ class DiscordNotifier:
             color=0xff0000  # Rojo
         )
 
-    def send_monitor_started(self, license_plate, interval_minutes):
+    def send_monitor_started(self, interval_minutes: int, days_limit: int = 15, show_license_plate: bool = False, license_plate: str = "") -> bool:
         """
         Envía notificación de que el monitor ha iniciado
 
         Args:
-            license_plate (str): Matrícula del vehículo
-            interval_minutes (int): Intervalo de revisión en minutos
+            interval_minutes: Intervalo de revisión en minutos
+            days_limit: Número de días de anticipación para notificar
+            show_license_plate: Si mostrar la matrícula en el mensaje (default: False)
+            license_plate: Matrícula del vehículo (opcional)
 
         Returns:
             bool: True si se envió correctamente
         """
-        title = "🟢 Monitor iniciado"
-        description = f"El monitor de ITV Argentona ha iniciado correctamente\n\n"
-        description += f"**Matrícula:** {license_plate}\n"
-        description += f"**Intervalo de revisión:** {interval_minutes} minutos\n\n"
-        description += "Te notificaremos cuando haya citas disponibles."
+        title = "🚀 Monitor ITV Argentona iniciado"
+        description = f"El monitor ha iniciado correctamente\n\n"
+
+        if show_license_plate and license_plate:
+            description += f"**Matrícula:** {license_plate}\n"
+
+        description += f"**Intervalo:** {interval_minutes} minutos\n"
+        description += f"**Notificar citas en:** próximos {days_limit} días\n\n"
+        description += "Te avisaremos cuando encuentre citas disponibles 🔔"
 
         return self.send_notification(
             title=title,
@@ -184,14 +224,14 @@ class DiscordNotifier:
             color=0x0099ff  # Azul
         )
 
-    def send_test(self):
+    def send_test(self) -> bool:
         """
         Envía un mensaje de prueba
 
         Returns:
             bool: True si se envió correctamente
         """
-        title = "✅ Webhook de Discord funcionando"
+        title = "Webhook de Discord funcionando"
         description = "Este es un mensaje de prueba del sistema de notificaciones."
 
         return self.send_notification(
@@ -211,16 +251,20 @@ def test_webhook():
     webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
 
     if not webhook_url:
-        print("❌ Error: No se ha configurado DISCORD_WEBHOOK_URL en el archivo .env")
+        print("[ERROR] No se ha configurado DISCORD_WEBHOOK_URL en el archivo .env")
+        print("\nComo usar:")
+        print("1. Ve a Discord > Ajustes del canal > Integraciones > Webhooks")
+        print("2. Crea un nuevo webhook y copia la URL")
+        print("3. Añade la URL al archivo .env: DISCORD_WEBHOOK_URL=https://...")
         return
 
-    print(f"🔗 Probando webhook...")
+    print("Probando webhook...")
     notifier = DiscordNotifier(webhook_url)
 
     if notifier.send_test():
-        print("✅ ¡Webhook funcionando correctamente!")
+        print("[OK] Webhook funcionando correctamente!")
     else:
-        print("❌ Error al enviar mensaje de prueba")
+        print("[ERROR] Error al enviar mensaje de prueba")
 
 
 if __name__ == "__main__":

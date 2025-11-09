@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:aibs.appluscorp.com)",
+      "Bash(env)",
+      "Bash(claude mcp:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
