@@ -51,3 +51,12 @@ screenshots/
 output/
 *.html
 *.txt
+
+# API responses and HTTP logs
+api_response_*.json
+http_log_*.txt
+http_summary_*.json
+
+# Data files
+stations.json
+Datos_Generales.js

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Scraper optimizado para ITV Argentona usando endpoint de API REST
+Scraper optimizado para estaciones ITV usando endpoint de API REST
 Usa el endpoint GetFechasHorasDisponibles para obtener disponibilidad directamente en JSON
 """
 
@@ -8,10 +8,34 @@ import os
 import re
 import random
 import string
+import time
 import requests
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Callable, Any
+from functools import wraps
 from dotenv import load_dotenv
+from requests.exceptions import (
+    ConnectionError,
+    Timeout,
+    RequestException,
+    HTTPError
+)
+from http.client import RemoteDisconnected
+
+# Import configuration
+try:
+    from config import (
+        REQUEST_TIMEOUT_SECONDS,
+        MAX_RETRIES,
+        RETRY_BACKOFF_FACTOR,
+        RETRY_BACKOFF_MAX
+    )
+except ImportError:
+    # Fallback values if config.py is not available
+    REQUEST_TIMEOUT_SECONDS = 60
+    MAX_RETRIES = 3
+    RETRY_BACKOFF_FACTOR = 1
+    RETRY_BACKOFF_MAX = 10
 
 
 def generate_random_license_plate() -> str:
@@ -34,15 +58,67 @@ def generate_random_license_plate() -> str:
     return f"{digits}{letters}"
 
 
-class ITVScraper:
-    """Scraper optimizado que usa el endpoint de API REST de ITV Argentona"""
+def retry_on_network_error(max_retries: int = MAX_RETRIES,
+                           backoff_factor: float = RETRY_BACKOFF_FACTOR,
+                           backoff_max: float = RETRY_BACKOFF_MAX):
+    """
+    Decorator to retry a function on network errors with exponential backoff
 
-    def __init__(self, license_plate: Optional[str] = None):
+    Args:
+        max_retries: Maximum number of retry attempts
+        backoff_factor: Factor for exponential backoff (e.g., 1 = 1s, 2s, 4s, 8s...)
+        backoff_max: Maximum backoff time in seconds
+
+    Returns:
+        Decorated function that retries on network errors
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> Any:
+            last_exception = None
+
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+
+                except HTTPError as e:
+                    # Don't retry on HTTP errors (400, 404, 500, etc.)
+                    # These indicate application-level issues, not network issues
+                    print(f"[ERROR] HTTP error: {e}")
+                    raise
+
+                except (ConnectionError, Timeout, RemoteDisconnected, RequestException) as e:
+                    last_exception = e
+
+                    if attempt < max_retries - 1:
+                        # Calculate backoff time with exponential growth
+                        backoff_time = min(backoff_factor * (2 ** attempt), backoff_max)
+
+                        print(f"[WARNING] Network error on attempt {attempt + 1}/{max_retries}: {type(e).__name__}")
+                        print(f"[INFO] Retrying in {backoff_time:.1f} seconds...")
+
+                        time.sleep(backoff_time)
+                    else:
+                        print(f"[ERROR] All {max_retries} attempts failed")
+
+            # If all retries failed, raise the last exception
+            if last_exception:
+                raise last_exception
+
+        return wrapper
+    return decorator
+
+
+class ITVScraper:
+    """Scraper optimizado que usa el endpoint de API REST para estaciones ITV de Applus+"""
+
+    def __init__(self, license_plate: Optional[str] = None, station_code: str = "B08"):
         """
         Inicializa el scraper
 
         Args:
             license_plate: Matrícula del vehículo sin espacios. Si es None, genera una aleatoria.
+            station_code: Código de la estación ITV (ej: B08=Argentona, B01=Barcelona)
         """
         if license_plate is None:
             self.license_plate = generate_random_license_plate()
@@ -50,8 +126,10 @@ class ITVScraper:
         else:
             self.license_plate = license_plate.replace(" ", "").replace("-", "").upper()
 
+        self.station_code = station_code
         self.base_url = "https://aibs.appluscorp.com"
         self.guid_sesion: Optional[str] = None
+        self._guid_has_navigated: bool = False  # Flag para trackear si el GUID actual navegó el flujo
 
         # Crear sesión con headers realistas
         self.session = requests.Session()
@@ -62,6 +140,7 @@ class ITVScraper:
             'Referer': 'https://www.applusiteuve.com/'
         })
 
+    @retry_on_network_error()
     def _get_guid_sesion(self) -> str:
         """
         Obtiene el guidSesion necesario para las peticiones
@@ -75,20 +154,26 @@ class ITVScraper:
         url = f"{self.base_url}/Reserva/ReservarMatricula"
         params = {
             'language': 'es',
-            'AppCentro': 'B08',
+            'AppCentro': self.station_code,
             'Matricula': self.license_plate
         }
 
-        response = self.session.get(url, params=params)
-        response.raise_for_status()
+        try:
+            response = self.session.get(url, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
+            response.raise_for_status()
 
-        # Extraer guidSesion del HTML
-        match = re.search(r'guidSesion["\s=:]+([a-f0-9\-]{36})', response.text, re.IGNORECASE)
-        if not match:
-            raise Exception("No se pudo obtener guidSesion del servidor")
+            # Extraer guidSesion del HTML
+            match = re.search(r'guidSesion["\s=:]+([a-f0-9\-]{36})', response.text, re.IGNORECASE)
+            if not match:
+                raise Exception("No se pudo obtener guidSesion del servidor")
 
-        return match.group(1)
+            return match.group(1)
 
+        except Exception as e:
+            print(f"[ERROR] Failed to get GUID session: {type(e).__name__}: {e}")
+            raise
+
+    @retry_on_network_error()
     def _navigate_to_dates_page(self) -> None:
         """
         Navega por el flujo necesario para poder acceder al endpoint de fechas
@@ -96,35 +181,77 @@ class ITVScraper:
         Raises:
             Exception: Si alguna navegación falla
         """
-        # Paso 1: Navegar a Eleccion_Estacion
-        response = self.session.get(
-            f"{self.base_url}/Reserva/NavegarAVistaSiguiente",
-            params={
-                'guidSesion': self.guid_sesion,
-                'actualViewName': 'Datos_Contacto'
-            }
-        )
-        response.raise_for_status()
+        try:
+            # Paso 1: Navegar a Eleccion_Estacion
+            response = self.session.get(
+                f"{self.base_url}/Reserva/NavegarAVistaSiguiente",
+                params={
+                    'guidSesion': self.guid_sesion,
+                    'actualViewName': 'Datos_Contacto'
+                },
+                timeout=REQUEST_TIMEOUT_SECONDS
+            )
+            response.raise_for_status()
 
-        # Paso 2: Navegar a página de fechas
+            # Paso 2: Navegar a página de fechas
+            response = self.session.get(
+                f"{self.base_url}/Reserva/NavegarAVistaSiguiente",
+                params={
+                    'guidSesion': self.guid_sesion,
+                    'actualViewName': 'Eleccion_Estacion'
+                },
+                timeout=REQUEST_TIMEOUT_SECONDS
+            )
+            response.raise_for_status()
+
+            # Pequeño delay para dar tiempo al servidor a procesar la sesión
+            time.sleep(1.5)
+
+        except Exception as e:
+            print(f"[ERROR] Navigation failed: {type(e).__name__}: {e}")
+            raise
+
+    @retry_on_network_error()
+    def _fetch_available_dates_api(self, mes: int, anyo: int) -> Dict:
+        """
+        Fetch available dates from API endpoint with retry on network errors
+
+        Args:
+            mes: Month (1-12)
+            anyo: Year (YYYY)
+
+        Returns:
+            Dict: JSON response with available dates
+
+        Raises:
+            HTTPError: On HTTP errors (400, 500, etc.)
+            ConnectionError, Timeout, etc.: On network errors (will be retried)
+        """
         response = self.session.get(
-            f"{self.base_url}/Reserva/NavegarAVistaSiguiente",
+            f"{self.base_url}/Reserva/GetFechasHorasDisponibles",
             params={
                 'guidSesion': self.guid_sesion,
-                'actualViewName': 'Eleccion_Estacion'
-            }
+                'mes': f"{mes:02d}",
+                'anyo': str(anyo)
+            },
+            timeout=REQUEST_TIMEOUT_SECONDS
         )
         response.raise_for_status()
+        return response.json()
 
     def get_available_dates(self, month: Optional[int] = None, year: Optional[int] = None,
-                           months_ahead: int = 3, reuse_guid: bool = False) -> List[Dict]:
+                           months_ahead: Optional[int] = None, days_limit: Optional[int] = None,
+                           reuse_guid: bool = False) -> List[Dict]:
         """
         Obtiene las fechas y horas disponibles del endpoint de API
 
         Args:
             month: Mes a consultar (1-12). Si None, usa mes actual
             year: Año a consultar. Si None, usa año actual
-            months_ahead: Número de meses adicionales a consultar (default: 3)
+            months_ahead: Número de meses adicionales a consultar. Si None, se calcula automáticamente
+                         basado en days_limit. Si days_limit también es None, default: 1 (2 meses total)
+            days_limit: Si se especifica, calcula automáticamente months_ahead para cubrir
+                       solo los próximos N días. Ej: days_limit=15 → consulta 1-2 meses máximo
             reuse_guid: Si True, reutiliza el GUID existente sin regenerar (default: False)
 
         Returns:
@@ -141,11 +268,14 @@ class ITVScraper:
             print(f"Obteniendo guidSesion para matrícula {self.license_plate}...")
             self.guid_sesion = self._get_guid_sesion()
             print(f"[OK] guidSesion: {self.guid_sesion}")
+            self._guid_has_navigated = False  # Nuevo GUID, necesita navegar
 
-            # Navegar por el flujo (necesario solo la primera vez para establecer sesión)
+        # Navegar por el flujo si el GUID actual no ha navegado aún
+        if not self._guid_has_navigated:
             print("Navegando por el flujo del portal...")
             self._navigate_to_dates_page()
             print("[OK] Flujo completado")
+            self._guid_has_navigated = True
         else:
             print(f"Reutilizando guidSesion existente: {self.guid_sesion}")
 
@@ -153,6 +283,32 @@ class ITVScraper:
         now = datetime.now()
         start_month = month or now.month
         start_year = year or now.year
+
+        # Calcular months_ahead automáticamente si se especifica days_limit
+        if months_ahead is None:
+            if days_limit is not None and days_limit > 0:
+                # Calcular fecha límite
+                limit_date = now + timedelta(days=days_limit)
+
+                # Calcular cuántos meses diferentes abarca el rango
+                start_date = datetime(start_year, start_month, 1)
+                months_to_check = 0
+                temp_date = start_date
+
+                while temp_date.year < limit_date.year or \
+                      (temp_date.year == limit_date.year and temp_date.month <= limit_date.month):
+                    months_to_check += 1
+                    if temp_date.month == 12:
+                        temp_date = datetime(temp_date.year + 1, 1, 1)
+                    else:
+                        temp_date = datetime(temp_date.year, temp_date.month + 1, 1)
+
+                # months_ahead = meses adicionales después del actual
+                months_ahead = max(0, months_to_check - 1)
+                print(f"[INFO] Calculado automáticamente: consultar {months_to_check} mes(es) para cubrir próximos {days_limit} días")
+            else:
+                # Default: consultar 2 meses (mes actual + 1 adicional)
+                months_ahead = 1
 
         all_appointments = []
 
@@ -165,31 +321,52 @@ class ITVScraper:
 
             print(f"\nConsultando {anyo}-{mes:02d}...")
 
-            # Llamar al endpoint de API
-            response = self.session.get(
-                f"{self.base_url}/Reserva/GetFechasHorasDisponibles",
-                params={
-                    'guidSesion': self.guid_sesion,
-                    'mes': f"{mes:02d}",
-                    'anyo': str(anyo)
-                }
-            )
+            # Llamar al endpoint de API con retry y timeout
+            try:
+                data = self._fetch_available_dates_api(mes, anyo)
 
-            if response.status_code != 200:
-                print(f"[AVISO] Error al obtener fechas de {anyo}-{mes:02d}: {response.status_code}")
-                # Si falla, invalidar el GUID para regenerar en próximo intento
-                if response.status_code == 500:
+                # Extraer citas disponibles
+                appointments = self._extract_available_appointments(data)
+                all_appointments.extend(appointments)
+                print(f"  [OK] Encontradas {len(appointments)} citas disponibles")
+
+            except HTTPError as e:
+                # Error 500 = GUID inválido o sesión expirada, necesitamos regenerar
+                if e.response.status_code == 500:
+                    print(f"[WARNING] Error 500 en {anyo}-{mes:02d} - GUID posiblemente expirado, regenerando...")
                     self.guid_sesion = None
+                    self._guid_has_navigated = False  # Resetear flag
+
+                    # Reintentar UNA vez con GUID nuevo
+                    try:
+                        print(f"  Reintentando {anyo}-{mes:02d} con GUID nuevo...")
+                        self.guid_sesion = self._get_guid_sesion()
+                        self._navigate_to_dates_page()
+                        self._guid_has_navigated = True  # Marcar como navegado
+
+                        data = self._fetch_available_dates_api(mes, anyo)
+                        appointments = self._extract_available_appointments(data)
+                        all_appointments.extend(appointments)
+                        print(f"  [OK] Encontradas {len(appointments)} citas disponibles (tras regenerar GUID)")
+                    except Exception as retry_error:
+                        print(f"  [ERROR] Reintento falló: {type(retry_error).__name__}")
+                        continue
+                else:
+                    # Otros errores HTTP (400, 404, etc.)
+                    print(f"[ERROR] HTTP {e.response.status_code} fetching {anyo}-{mes:02d}")
+                    if e.response.status_code in [401, 403]:
+                        self.guid_sesion = None
+                        self._guid_has_navigated = False
+
+            except (ConnectionError, Timeout, RemoteDisconnected, RequestException) as e:
+                print(f"[ERROR] Network error fetching {anyo}-{mes:02d}: {type(e).__name__}: {e}")
+                self.guid_sesion = None
+                self._guid_has_navigated = False
                 continue
 
-            # Parsear JSON
-            data = response.json()
-
-            # Extraer citas disponibles
-            appointments = self._extract_available_appointments(data)
-            all_appointments.extend(appointments)
-
-            print(f"  [OK] Encontradas {len(appointments)} citas disponibles")
+            except Exception as e:
+                print(f"[ERROR] Unexpected error fetching {anyo}-{mes:02d}: {type(e).__name__}: {e}")
+                continue
 
             # Avanzar al siguiente mes
             if current_date.month == 12:
@@ -245,13 +422,12 @@ def main():
     # license_plate = os.getenv("LICENSE_PLATE")
 
     print("\n" + "="*70)
-    print("  ITV ARGENTONA SCRAPER - Optimizado con API REST")
+    print("  ITV SCRAPER - Optimizado con API REST")
     print("="*70)
-    print(f"Estación: ITV Argentona (B08)")
-    print("="*70 + "\n")
 
     scraper = ITVScraper(license_plate=license_plate)
 
+    print(f"Estación: {scraper.station_code}")
     print(f"Matrícula usada: {scraper.license_plate}")
     print("="*70 + "\n")
 

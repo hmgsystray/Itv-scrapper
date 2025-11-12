@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Notificador de Discord para el monitor de ITV Argentona
+Notificador de Discord para el monitor de ITV
 Envía notificaciones mediante webhooks de Discord
 """
 
@@ -40,15 +40,22 @@ class DiscordNotifier:
         """
         # Modo terminal
         if self.terminal_only:
+            # Remove emojis for Windows terminal compatibility
+            title_clean = title.encode('ascii', 'ignore').decode('ascii')
+            desc_clean = description.encode('ascii', 'ignore').decode('ascii') if description else ""
+
             print("\n" + "="*70)
-            print(f">> {title}")
+            print(f">> {title_clean}")
             print("="*70)
-            print(description)
+            if desc_clean:
+                print(desc_clean)
             if fields:
                 print("\nDetalles:")
                 for field in fields:
-                    print(f"\n{field.get('name', 'N/A')}:")
-                    print(f"  {field.get('value', 'N/A')}")
+                    name = str(field.get('name', 'N/A')).encode('ascii', 'ignore').decode('ascii')
+                    value = str(field.get('value', 'N/A')).encode('ascii', 'ignore').decode('ascii')
+                    print(f"\n{name}:")
+                    print(f"  {value}")
             print("="*70)
             return True
 
@@ -60,7 +67,7 @@ class DiscordNotifier:
                 "color": color,
                 "timestamp": datetime.utcnow().isoformat(),
                 "footer": {
-                    "text": "ITV Argentona Monitor"
+                    "text": "ITV Scraper Monitor"
                 }
             }
 
@@ -89,7 +96,8 @@ class DiscordNotifier:
             print(f"[ERROR] Error al enviar notificacion a Discord: {str(e)}")
             return False
 
-    def send_new_appointments(self, appointments: List[Dict], show_license_plate: bool = False, license_plate: str = "") -> bool:
+    def send_new_appointments(self, appointments: List[Dict], show_license_plate: bool = False, license_plate: str = "",
+                             station_code: str = "", station_name: str = "") -> bool:
         """
         Envía notificación de nuevas citas disponibles
 
@@ -97,6 +105,8 @@ class DiscordNotifier:
             appointments: Lista de citas disponibles
             show_license_plate: Si mostrar la matrícula en el mensaje (default: False)
             license_plate: Matrícula del vehículo (opcional)
+            station_code: Código de la estación ITV (opcional, ej: "B08")
+            station_name: Nombre de la estación ITV (opcional, ej: "ITV Argentona")
 
         Returns:
             bool: True si se envió correctamente
@@ -128,7 +138,13 @@ class DiscordNotifier:
                 "inline": False
             })
 
-        title = "🔔 NUEVAS CITAS DISPONIBLES en ITV Argentona"
+        # Construir título con información de estación si está disponible
+        title = "🔔 NUEVAS CITAS DISPONIBLES"
+        if station_name and station_code:
+            title += f" en {station_name} ({station_code})"
+        elif station_code:
+            title += f" en estación {station_code}"
+
         description = f"Se han detectado **{len(appointments)} nueva(s) cita(s)** disponible(s)"
 
         if show_license_plate and license_plate:
@@ -151,18 +167,26 @@ class DiscordNotifier:
             fields=fields
         )
 
-    def send_no_appointments(self, show_license_plate: bool = False, license_plate: str = "") -> bool:
+    def send_no_appointments(self, show_license_plate: bool = False, license_plate: str = "",
+                            station_code: str = "", station_name: str = "") -> bool:
         """
         Envía notificación de que no hay citas disponibles
 
         Args:
             show_license_plate: Si mostrar la matrícula en el mensaje (default: False)
             license_plate: Matrícula del vehículo (opcional)
+            station_code: Código de la estación ITV (opcional, ej: "B08")
+            station_name: Nombre de la estación ITV (opcional, ej: "ITV Argentona")
 
         Returns:
             bool: True si se envió correctamente
         """
         title = "No hay citas disponibles"
+        if station_name and station_code:
+            title += f" en {station_name} ({station_code})"
+        elif station_code:
+            title += f" en estación {station_code}"
+
         description = "No se encontraron citas disponibles"
 
         if show_license_plate and license_plate:
@@ -208,7 +232,7 @@ class DiscordNotifier:
         Returns:
             bool: True si se envió correctamente
         """
-        title = "🚀 Monitor ITV Argentona iniciado"
+        title = "🚀 Monitor ITV iniciado"
         description = f"El monitor ha iniciado correctamente\n\n"
 
         if show_license_plate and license_plate:
