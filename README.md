@@ -44,7 +44,7 @@ Edita el archivo `.env`:
 
 ```bash
 # Estaciones a monitorizar (formato: CODIGO:MATRICULA:NOMBRE)
-STATIONS=B08:6784BDR:ITV Argentona
+STATIONS=B08:1234ABC:ITV Argentona
 
 # Discord webhook (opcional, si no se configura solo muestra en terminal)
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/TU_WEBHOOK
@@ -63,16 +63,16 @@ DAYS_LIMIT=45
 **Ejemplos:**
 ```bash
 # Una estación
-STATIONS=B08:6784BDR:ITV Argentona
+STATIONS=B08:1234ABC:ITV Argentona
 
 # Múltiples estaciones
-STATIONS=B08:6784BDR:ITV Argentona,B07:6146CXR:ITV Mollet,B01:1234ABC:ITV Barcelona
+STATIONS=B08:1234ABC:ITV Argentona,B07:5678DEF:ITV Mollet,B01:9012GHI:ITV Barcelona
 
 # Con matrícula aleatoria (dejar campo vacío)
 STATIONS=B08::ITV Argentona
 
 # Sin nombre personalizado (usará "ITV B08")
-STATIONS=B08:6784BDR
+STATIONS=B08:1234ABC
 ```
 
 ### Códigos de estaciones comunes
