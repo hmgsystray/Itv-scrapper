@@ -267,12 +267,14 @@ def main():
     stations_str = os.getenv("STATIONS", "")
     if not stations_str:
         print("[ERROR] No hay estaciones configuradas en STATIONS en .env")
-        print("[INFO] Formato: STATIONS=B08:6784BDR,B07:6146CXR")
-        print("[INFO] Usa CODIGO: para generar matrícula aleatoria")
-        print("[INFO] Ejemplo: STATIONS=B08:,B07:,B01:")
+        print("[INFO] Formato: STATIONS=CODIGO:MATRICULA:NOMBRE,CODIGO:MATRICULA:NOMBRE")
+        print("[INFO] Ejemplo: STATIONS=B08:6784BDR:ITV Argentona,B07:6146CXR:ITV Mollet")
+        print("[INFO] El nombre es opcional (si no se pone, usa 'ITV CODIGO')")
+        print("[INFO] La matrícula es opcional (si no se pone, genera una aleatoria)")
+        print("[INFO] Ejemplo con matrícula aleatoria: STATIONS=B08::ITV Argentona")
         return
 
-    # Parsear configuración de estaciones (formato: B08:6784BDR,B07:)
+    # Parsear configuración de estaciones (formato: CODIGO:MATRICULA:NOMBRE)
     plates_config = []
     for entry in stations_str.split(","):
         entry = entry.strip()
@@ -280,12 +282,18 @@ def main():
             continue
 
         if ":" not in entry:
-            print(f"[WARNING] Formato incorrecto: '{entry}'. Usa CODIGO:MATRICULA")
+            print(f"[WARNING] Formato incorrecto: '{entry}'. Usa CODIGO:MATRICULA:NOMBRE")
             continue
 
-        station_code, plate = entry.split(":", 1)
-        station_code = station_code.strip().upper()
-        plate = plate.strip().upper()
+        # Dividir por ':' (puede tener 2 o 3 campos)
+        parts = entry.split(":")
+        if len(parts) < 2:
+            print(f"[WARNING] Formato incorrecto: '{entry}'. Necesita al menos CODIGO:MATRICULA")
+            continue
+
+        station_code = parts[0].strip().upper()
+        plate = parts[1].strip().upper() if len(parts) > 1 else ""
+        custom_name = parts[2].strip() if len(parts) > 2 else ""
 
         # Si no hay matrícula, generar una aleatoria
         if not plate:
@@ -293,10 +301,14 @@ def main():
             plate = generate_random_license_plate()
             print(f"[INFO] Generada matrícula aleatoria {plate} para estación {station_code}")
 
+        # Si no hay nombre personalizado, usar formato por defecto
+        if not custom_name:
+            custom_name = f'ITV {station_code}'
+
         plates_config.append({
             'plate': plate,
             'station': station_code,
-            'name': f'ITV {station_code}'
+            'name': custom_name
         })
 
     if not plates_config:
